@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>{{ machine_id }} — IGN2932M75 Bond Data</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;600&display=swap" rel="stylesheet"/>
+    <script src="https://cdn.plot.ly/plotly-2.26.0.min.js"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg: #0f1117; --surface: #181c27; --surface2: #1e2235;
+            --border: #2a2f3e; --accent: #3b82f6; --accent-r: #ef4444;
+            --text: #e2e8f0; --muted: #64748b;
+            --sidebar-w: 240px; --topbar-h: 56px;
+            --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif;
+        }
+        body { background: var(--bg); font-family: var(--sans); color: var(--text);
+            min-height: 100vh; display: flex; flex-direction: column; }
+        .topbar { position: fixed; top: 0; left: 0; right: 0; height: var(--topbar-h);
+            background: var(--surface); border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; padding: 0 20px; gap: 16px; z-index: 100; }
+        .topbar-brand { font-family: var(--mono); font-size: 14px; font-weight: 600;
+            color: var(--text); letter-spacing: 0.05em; display: flex;
+            align-items: center; gap: 10px; text-decoration: none; }
+        .brand-mark { width: 28px; height: 28px; background: var(--accent);
+            border-radius: 5px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .brand-mark svg { width: 16px; height: 16px; fill: white; }
+        .topbar-right { margin-left: auto; display: flex; align-items: center; gap: 16px; }
+        .topbar-user { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+        .topbar-user span { color: var(--text); }
+        .btn-logout { font-size: 12px; color: var(--muted); text-decoration: none;
+            padding: 5px 10px; border: 1px solid var(--border); border-radius: 4px;
+            transition: color 0.2s, border-color 0.2s; font-family: var(--mono); }
+        .btn-logout:hover { color: var(--accent-r); border-color: var(--accent-r); }
+        .layout { display: flex; margin-top: var(--topbar-h); min-height: calc(100vh - var(--topbar-h)); }
+        .sidebar { width: var(--sidebar-w); background: var(--surface);
+            border-right: 1px solid var(--border); position: fixed;
+            top: var(--topbar-h); bottom: 0; overflow-y: auto; flex-shrink: 0; }
+        .sidebar-section { padding: 20px 16px 8px; font-size: 10px; font-weight: 600;
+            color: var(--muted); text-transform: uppercase; letter-spacing: 0.12em; font-family: var(--mono); }
+        .sidebar-link { display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+            text-decoration: none; color: var(--muted); font-size: 13px;
+            border-left: 3px solid transparent; transition: all 0.15s; margin: 1px 0; }
+        .sidebar-link:hover { color: var(--text); background: var(--surface2); border-left-color: var(--border); }
+        .sidebar-link.active { color: var(--accent); background: rgba(59,130,246,0.08);
+            border-left-color: var(--accent); font-weight: 600; }
+        .sidebar-link .dot { width: 8px; height: 8px; border-radius: 50%;
+            background: var(--border); flex-shrink: 0; transition: background 0.15s; }
+        .sidebar-link.active .dot { background: var(--accent); }
+        .sidebar-link:hover .dot { background: var(--muted); }
+        .main { margin-left: var(--sidebar-w); flex: 1; padding: 28px 28px 40px; min-width: 0; }
+        .page-header { display: flex; align-items: baseline; gap: 14px;
+            margin-bottom: 24px; flex-wrap: wrap; }
+        .page-title { font-size: 22px; font-weight: 600; color: var(--text); }
+        .page-badge { font-family: var(--mono); font-size: 11px; padding: 3px 9px;
+            background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25);
+            border-radius: 100px; color: var(--accent); letter-spacing: 0.06em; }
+        .page-meta { font-size: 12px; color: var(--muted); margin-left: auto; font-family: var(--mono); }
+        .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .chart-card { background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; overflow: hidden; animation: fadeIn 0.4s ease both; }
+        .chart-card:nth-child(1) { animation-delay: 0.05s; }
+        .chart-card:nth-child(2) { animation-delay: 0.10s; }
+        .chart-card:nth-child(3) { animation-delay: 0.15s; }
+        .chart-card:nth-child(4) { animation-delay: 0.20s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        .chart-inner { width: 100%; }
+        .footer { margin-left: var(--sidebar-w); border-top: 1px solid var(--border);
+            padding: 14px 28px; display: flex; align-items: center;
+            justify-content: space-between; font-size: 11px; color: var(--muted); font-family: var(--mono); }
+        .footer a { color: var(--accent); text-decoration: none; }
+        .footer a:hover { text-decoration: underline; }
+        .no-data { height: 320px; display: flex; align-items: center;
+            justify-content: center; color: var(--muted); font-size: 13px; font-family: var(--mono); }
+        @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<nav class="topbar">
+    <a class="topbar-brand" href="/">
+        <div class="brand-mark">
+            <svg viewBox="0 0 24 24"><path d="M3 3h8v8H3zm10 0h8v8h-8zM3 13h8v8H3zm10 5h2v-2h2v2h2v2h-2v2h-2v-2h-2z"/></svg>
+        </div>
+        IGN2932M75
+    </a>
+    <div class="topbar-right">
+        <span class="topbar-user">user: <span>{{ user }}</span></span>
+        <a class="btn-logout" href="/logout">logout</a>
+    </div>
+</nav>
+<div class="layout">
+    <aside class="sidebar">
+        <div class="sidebar-section">Bond Pull Data</div>
+        {% for m in machines %}
+        <a class="sidebar-link {% if m == machine_id %}active{% endif %}" href="/machine/{{ m }}">
+            <span class="dot"></span>{{ m }} Machine Chart
+        </a>
+        {% endfor %}
+    </aside>
+    <main class="main">
+        <div class="page-header">
+            <h1 class="page-title">{{ machine_id }} Machine</h1>
+            <span class="page-badge">{{ product }}</span>
+            <span class="page-meta">4 bond type charts</span>
+        </div>
+        <div class="charts-grid">
+            {% for i in range(bond_types|length) %}
+            <div class="chart-card">
+                {% if charts and i < charts|length %}
+                <div class="chart-inner" id="chart-{{ i }}"></div>
+                {% else %}
+                <div class="no-data">no data available</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </main>
+</div>
+<footer class="footer">
+    <span>Copyright &copy; Integra 2024</span>
+    <a href="/static/data/BOND PULL DATA IGN2932M75 {{ machine_id }} bonder.xlsx">↓ Download Excel — {{ machine_id }}</a>
+</footer>
+<script>
+    const charts = {{ charts | tojson }};
+    charts.forEach((chartJson, i) => {
+        const el = document.getElementById('chart-' + i);
+        if (!el) return;
+        const fig = JSON.parse(chartJson);
+        fig.layout.paper_bgcolor = 'transparent';
+        fig.layout.plot_bgcolor  = '#13171f';
+        fig.layout.font = { ...fig.layout.font, color: '#94a3b8' };
+        fig.layout.xaxis = { ...fig.layout.xaxis, gridcolor: '#2a2f3e', color: '#94a3b8' };
+        fig.layout.yaxis = { ...fig.layout.yaxis, gridcolor: '#2a2f3e', color: '#94a3b8' };
+        fig.layout.title.font = { ...fig.layout.title.font, color: '#e2e8f0' };
+        Plotly.newPlot(el, fig.data, fig.layout, {
+            responsive: true, displayModeBar: true,
+            modeBarButtonsToRemove: ['select2d','lasso2d','autoScale2d'],
+            displaylogo: false
+        });
+    });
+</script>
+</body>
+</html>
