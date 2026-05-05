@@ -34,9 +34,9 @@ except ImportError:
 # Configuration
 # ---------------------------------------------------------------------------
 
-PRODUCT   = "IGN2932M75"   # string that must appear in col-5 or col-6
-CTRL_FLAG = "CRTL CHART"   # value in the CTRL_CHART column (col-10)
-SPEC_LIMIT = 8             # lower spec limit in grams
+PRODUCT    = "IGN2932M75"   # string that must appear in col-5 or col-6
+CTRL_FLAG  = "CRTL CHART"   # value in the CTRL_CHART column (col-10)
+SPEC_LIMIT = 8              # lower spec limit in grams
 
 # Machines to include — canonical upper-case IDs
 TARGET_MACHINES = {"B21", "B24", "B25", "B27"}
@@ -65,7 +65,6 @@ def normalise_wire_type(raw):
     if pd.isna(raw):
         return None
     s = str(raw).strip().lower()
-    # remove extra spaces
     s = re.sub(r"\s+", " ", s)
     for pattern, key in TYPE_MAP.items():
         if re.match(pattern, s):
@@ -78,7 +77,6 @@ def normalise_machine(raw):
     if pd.isna(raw):
         return None
     s = str(raw).strip().upper().replace(" ", "").replace("-", "")
-    # match B followed by 2 digits
     m = re.match(r"B(\d{2})", s)
     if m:
         return "B" + m.group(1)
@@ -86,22 +84,6 @@ def normalise_machine(raw):
 
 
 def load_raw(csv_path):
-    """
-    The CSV has two distinct layouts that can appear interleaved:
-
-    Layout A (rows 0-14): header metadata rows, no Test ID
-        col-3 = date string, col-5 = Machine, col-6 = Part,
-        col-8 = Wire Type, col-10 = Ctrl flag, col-18 = Peak Force
-
-    Layout B (rows 15+): full Royce-instrument export
-        col-0 = Test ID, col-3 = DateTime, col-4 = Machine,
-        col-5 = Part, col-8 = Wire Type, col-10 = Ctrl flag,
-        col-17 or col-18 = Peak Force
-
-    Additionally the CSV periodically repeats its own header row
-    and some later rows were exported with comma-delimited values
-    embedded inside a single tab-separated cell.
-    """
     df_raw = pd.read_csv(csv_path, sep="\t", header=None, dtype=str)
     return df_raw
 
@@ -115,10 +97,8 @@ def parse_layout_b(df_raw):
     records = []
 
     for _, row in df_raw.iterrows():
-        # ---- detect comma-embedded rows ----
         cell0 = str(row.iloc[0]).strip()
         if "," in cell0 and re.match(r"^\d+,", cell0):
-            # the entire record is in col-0 as CSV; split it
             parts = next(iter(csv_split(cell0)))
             if len(parts) < 9:
                 continue
@@ -132,16 +112,14 @@ def parse_layout_b(df_raw):
             except (IndexError, ValueError):
                 continue
         else:
-            # standard tab-separated Layout-B row
             if not re.match(r"^\d+$", cell0):
-                continue   # not a data row
+                continue
             try:
                 date_str = str(row.iloc[3]).strip()
                 machine  = str(row.iloc[4]).strip()
                 part     = str(row.iloc[5]).strip()
                 wtype    = str(row.iloc[8]).strip()
                 ctrl     = str(row.iloc[10]).strip() if len(row) > 10 else ""
-                # peak force: prefer col-17 (rounded), fall back to col-18 (raw)
                 peak_col = 17
                 peak = str(row.iloc[peak_col]).strip() if len(row) > peak_col else ""
                 if not peak or peak == "nan":
@@ -171,7 +149,7 @@ def parse_layout_a(df_raw):
     for _, row in df_raw.iterrows():
         cell0 = str(row.iloc[0]).strip()
         if cell0 not in ("nan", ""):
-            continue   # not a Layout-A row
+            continue
         try:
             date_str = str(row.iloc[3]).strip()
             machine  = str(row.iloc[5]).strip()
@@ -222,17 +200,10 @@ def build_dataset(csv_path):
     print(f"      Rows with CRTL flag: {len(df)}")
 
     # ---- normalise machine / wire type ----
-    # When the product string is IN the machine column, the actual machine
-    # is in the part column and vice-versa (swapped in some later records)
     def resolve_machine(row):
         if PRODUCT.upper() in str(row["machine"]).upper():
             return row["part"]
         return row["machine"]
-
-    def resolve_part(row):
-        if PRODUCT.upper() in str(row["machine"]).upper():
-            return row["machine"]
-        return row["part"]
 
     df["machine_raw"] = df.apply(resolve_machine, axis=1)
     df["machine_id"]  = df["machine_raw"].apply(normalise_machine)
@@ -241,25 +212,20 @@ def build_dataset(csv_path):
     # ---- parse peak force ----
     df["force"] = pd.to_numeric(df["peak"], errors="coerce")
 
-    # ---- parse date ----
-    df["date"] = pd.to_datetime(df["date_str"], errors="coerce", infer_datetime_format=True)
+    # ---- parse date (infer_datetime_format removed in pandas 2.x) ----
+    df["date"] = pd.to_datetime(df["date_str"], errors="coerce")
 
     # ---- drop unusable rows ----
     before = len(df)
     df = df.dropna(subset=["machine_id", "wire_key", "force", "date"])
     df = df[df["machine_id"].isin(TARGET_MACHINES)]
-    df = df[df["force"] > 0]   # drop zero / negative readings
+    df = df[df["force"] > 0]
     print(f"      Clean rows after normalisation: {len(df)} (dropped {before - len(df)})")
 
     return df
 
 
 def group_by_machine_date(df):
-    """
-    For each machine, produce a sorted list of {date, t1, t2, t3s, t3l}
-    where each value is the AVERAGE peak force of all readings on that date
-    for that wire type.
-    """
     print("[3/4] Grouping by machine + date ...")
 
     result = {}
@@ -267,7 +233,6 @@ def group_by_machine_date(df):
         mdf = df[df["machine_id"] == machine_id].copy()
         mdf["date_only"] = mdf["date"].dt.date
 
-        # pivot: rows = date, columns = wire_key, values = mean force
         pivot = (
             mdf.groupby(["date_only", "wire_key"])["force"]
             .mean()
@@ -276,12 +241,10 @@ def group_by_machine_date(df):
             .sort_values("date_only")
         )
 
-        # ensure all 4 columns exist
         for col in ["t1", "t2", "t3s", "t3l"]:
             if col not in pivot.columns:
                 pivot[col] = float("nan")
 
-        # drop rows where ALL four types are NaN
         pivot = pivot.dropna(subset=["t1", "t2", "t3s", "t3l"], how="all")
 
         dates = [str(d) for d in pivot["date_only"]]
@@ -290,18 +253,18 @@ def group_by_machine_date(df):
         t3s   = [round(v, 2) if pd.notna(v) else None for v in pivot["t3s"]]
         t3l   = [round(v, 2) if pd.notna(v) else None for v in pivot["t3l"]]
 
-        num_id = machine_id.replace("B", "")   # "21", "24" etc.
+        num_id = machine_id.replace("B", "")
         result[num_id] = {
-            "label":      machine_id + " Machine",
-            "title":      machine_id,
-            "date":       dates[-1] if dates else "—",
-            "specLimit":  SPEC_LIMIT,
-            "excel":      f"data/BOND PULL DATA IGN2932M75 {machine_id} bonder.xlsx",
-            "dates":      dates,
-            "t1":         t1,
-            "t2":         t2,
-            "t3s":        t3s,
-            "t3l":        t3l,
+            "label":     machine_id + " Machine",
+            "title":     machine_id,
+            "date":      dates[-1] if dates else "—",
+            "specLimit": SPEC_LIMIT,
+            "excel":     f"data/BOND PULL DATA IGN2932M75 {machine_id} bonder.xlsx",
+            "dates":     dates,
+            "t1":        t1,
+            "t2":        t2,
+            "t3s":       t3s,
+            "t3l":       t3l,
         }
         print(f"      {machine_id}: {len(dates)} date points")
 
