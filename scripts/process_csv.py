@@ -2,323 +2,280 @@
 """
 process_csv.py
 ==============
-Reads RoyceData.csv, filters CRTL CHART rows for IGN2932M75,
-normalises machine names and wire-type labels, groups by machine
-and date, averages the peak force per (date, wire-type) group,
-then writes dashboard/data/machine-data.json.
+Converts RoyceData.csv → dashboard/data/machine-data.json
+
+Rules (confirmed):
+  1. Skip rows 1-3746 (old manual records, different format)
+  2. Column D (index 3)  = Date
+  3. Column E (index 4)  = Machine  → keep B21, B24, B25, B27 only
+  4. Column F (index 5)  = Product  → keep IGN2932M75 only
+  5. Column H (index 7)  = Wire/Bond Type
+  6. Column R (index 17) = Peak Force g (Y-axis)
+  7. Normalise all wire-type spelling variants → TYPE 1 / TYPE 2 / TYPE 3 SHORT / TYPE 3 LONG
+  8. Duplicates: keep LAST value per (Date, Machine, Wire_Type)
 
 Usage:
     python3 scripts/process_csv.py \
-        --csv  /home/integra/RoyceData.csv \
-        --out  /var/www/integra-royce/dashboard/data/machine-data.json
+        --csv /home/integra/RoyceData.csv \
+        --out /var/www/integra-royce/dashboard/data/machine-data.json
 
-Schedule with cron (runs at 06:00 every day):
+Cron (daily 06:00):
     0 6 * * * python3 /var/www/integra-royce/scripts/process_csv.py \
         --csv /home/integra/RoyceData.csv \
         --out /var/www/integra-royce/dashboard/data/machine-data.json
 """
 
 import re
+import csv
 import json
 import argparse
 import sys
-import csv as csvmod
+from pathlib import Path
 
 try:
     import pandas as pd
 except ImportError:
-    sys.exit("pandas is required: pip install pandas --break-system-packages")
+    sys.exit("pandas is required:  pip install pandas --break-system-packages")
 
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+# ── configuration ────────────────────────────────────────────────────────────
 
-PRODUCT    = "IGN2932M75"
-SPEC_LIMIT = 8
+SKIP_ROWS       = 3746                          # rows 1-3746 are skipped
+TARGET_PRODUCT  = "IGN2932M75"
 TARGET_MACHINES = {"B21", "B24", "B25", "B27"}
+SPEC_LIMIT      = 8                             # lower spec limit (g)
 
-# ---------------------------------------------------------------------------
-# Wire-type normalisation — all variants found in the CSV
-# ---------------------------------------------------------------------------
-TYPE_RULES = [
-    # Type 1
-    (r"^(type\s*[-#]?\s*1|type1|type\s*i|output-?1|input1|type\s*-\s*1|type\s*-\s*1)$", "t1"),
-    # Type 2
-    (r"^(type\s*[-#]?\s*2|type2|type\s*ii|output-?2|input2|type\s*-\s*2)$", "t2"),
-    # Type 3 Short — many misspellings
-    (r"^type[\s_-]*3[\s_-]*(s[hc]?o?r?t?|chort|schort|schot|shot)$", "t3s"),
-    (r"^(type3\s*shor?t?|type3short|type3\s*chort)$", "t3s"),
-    (r"^t[\s_]*3[\s_]*(shor?t?|chort|schort|ype3\s*shor?t?)$", "t3s"),
-    (r"^tipe[\s_-]*3[\s_-]*shor?t?$", "t3s"),
-    (r"^3\s*shor?t?$", "t3s"),
-    # Type 3 Long
-    (r"^type[\s_-]*3[\s_-]*(lon?g?|lng)$", "t3l"),
-    (r"^(type3\s*lon?g?|type3long|type[\s_-]*3[\s_-]*long[\s_]*3)$", "t3l"),
-    (r"^t[\s_]*3[\s_]*lon?g?$", "t3l"),
-    (r"^tipe[\s_-]*3[\s_-]*lon?g?$", "t3l"),
-    (r"^3\s*lon?g?$", "t3l"),
-    # Loose numeric labels (old Layout-A records)
-    (r"^2$", "t2"),
-    (r"^1$", "t1"),
+# column indices inside the comma-separated data rows
+COL_DATE    = 3   # D
+COL_MACHINE = 4   # E
+COL_PRODUCT = 5   # F
+COL_WTYPE   = 7   # H
+COL_PEAK    = 17  # R
+
+
+# ── wire-type normalisation ───────────────────────────────────────────────────
+# Maps every spelling variant found in the CSV to one of four canonical labels.
+
+_WIRE_RULES = [
+    # TYPE 1
+    (r"^(type\s*[-#i]?\s*1|type1|type\s*-\s*1|output-?1|input1)$",   "TYPE 1"),
+    # TYPE 2
+    (r"^(type\s*[-#]?\s*2|type2|type\s*-\s*2|output-?2|input2)$",    "TYPE 2"),
+    # TYPE 3 SHORT  (chort / schort / schot / shot / shor variants)
+    (r"^type[\s_-]*3[\s_-]*(s[hc]?o?r?t?|chort|schort|schot|shot)$", "TYPE 3 SHORT"),
+    (r"^(type3\s*shor?t?|type3short|type3\s*chort)$",                 "TYPE 3 SHORT"),
+    (r"^t[\s_]*3[\s_]*(shor?t?|chort|schort|ype3\s*shor?t?)$",       "TYPE 3 SHORT"),
+    (r"^tipe[\s_-]*3[\s_-]*shor?t?$",                                 "TYPE 3 SHORT"),
+    (r"^type[\s_-]*3[\s_-]*schort$",                                  "TYPE 3 SHORT"),
+    (r"^type-3\s*sch?o[rt]+$",                                        "TYPE 3 SHORT"),
+    (r"^3\s*shor?t?$",                                                "TYPE 3 SHORT"),
+    # TYPE 3 LONG
+    (r"^type[\s_-]*3[\s_-]*(lon?g?|lng)$",                            "TYPE 3 LONG"),
+    (r"^(type3\s*lon?g?|type3long|type[\s_-]*3[\s_-]*long[\s_]*3?)$", "TYPE 3 LONG"),
+    (r"^t[\s_]*3[\s_]*lon?g?$",                                       "TYPE 3 LONG"),
+    (r"^tipe[\s_-]*3[\s_-]*lon?g?$",                                  "TYPE 3 LONG"),
+    (r"^type-3\s*lon?g?$",                                            "TYPE 3 LONG"),
+    (r"^3\s*lon?g?$",                                                 "TYPE 3 LONG"),
+    # TYPE 3 ambiguous (no short/long) → SHORT (conservative default)
+    (r"^(type\s*[-#]?\s*3|type3|type-3|type#3)$",                    "TYPE 3 SHORT"),
 ]
 
 
-def normalise_wire_type(raw):
-    if pd.isna(raw) or str(raw).strip().lower() in ("nan", ""):
+def normalise_wire_type(raw: str):
+    """Return canonical wire-type label or None if unrecognisable."""
+    if not raw or raw.lower() == "nan":
         return None
-    s = re.sub(r"\s+", " ", str(raw).strip().lower())
-    for pattern, key in TYPE_RULES:
+    s = re.sub(r"\s+", " ", raw.strip().lower())
+    for pattern, label in _WIRE_RULES:
         if re.match(pattern, s):
-            return key
+            return label
     return None
 
 
-def normalise_machine(raw):
-    if pd.isna(raw):
+def normalise_machine(raw: str):
+    """Return 'B21' / 'B24' / 'B25' / 'B27' or None."""
+    if not raw:
         return None
-    s = re.sub(r"[\s\-]+", "", str(raw).strip().upper())
+    s = re.sub(r"[\s\-]+", "", raw.strip().upper())
     m = re.match(r"B(\d{2})", s)
     return "B" + m.group(1) if m else None
 
 
-# ---------------------------------------------------------------------------
-# CSV loading
-# ---------------------------------------------------------------------------
+# ── CSV parsing ───────────────────────────────────────────────────────────────
 
-def load_raw(csv_path):
-    return pd.read_csv(csv_path, sep="\t", header=None, dtype=str)
-
-
-def csv_split(line):
-    yield list(csvmod.reader([line]))[0]
-
-
-def safe_col(row, idx, default=""):
-    try:
-        v = str(row.iloc[idx]).strip()
-        return v if v != "nan" else default
-    except IndexError:
-        return default
-
-
-# ---------------------------------------------------------------------------
-# Layout-A: rows with no Test ID (col-0 is NaN)
-# col-3=date  col-5=Machine  col-6=Part  col-8=WireType
-# ctrl in col-10 OR col-11    peak in col-18
-# ---------------------------------------------------------------------------
-def parse_layout_a(df_raw):
-    records = []
-    for _, row in df_raw.iterrows():
-        if str(row.iloc[0]).strip() not in ("nan", ""):
-            continue
-        date_str = safe_col(row, 3)
-        machine  = safe_col(row, 5)
-        part     = safe_col(row, 6)
-        wtype    = safe_col(row, 8)
-        peak     = safe_col(row, 18)
-        ctrl10   = safe_col(row, 10)
-        ctrl11   = safe_col(row, 11)
-        ctrl = ctrl10 if "CRTL" in ctrl10.upper() or ctrl10.upper() == "YES" else ctrl11
-
-        if PRODUCT.upper() not in machine.upper() and PRODUCT.upper() not in part.upper():
-            continue
-        records.append({"date_str": date_str, "machine": machine, "part": part,
-                         "wtype": wtype, "ctrl": ctrl, "peak": peak})
-
-    return pd.DataFrame(records) if records else pd.DataFrame(
-        columns=["date_str", "machine", "part", "wtype", "ctrl", "peak"])
-
-
-# ---------------------------------------------------------------------------
-# Layout-B: rows where col-0 is a numeric Test ID
-#
-# Two sub-layouts exist inside Layout-B:
-#
-#   Sub-layout B1 (most rows):
-#     col-4=Machine  col-5=Part(product)  col-6=LotNo  col-7=WireType
-#     col-10=ctrl    col-17=peak(rounded)
-#
-#   Sub-layout B2 (B24/B25 older rows — no lot number):
-#     col-4=Machine  col-5=Part(product)  col-7=<empty>  col-8=WireType
-#     col-10=ctrl    col-17=peak(rounded)
-#
-# We detect which sub-layout by checking whether col-7 looks like a wire type.
-# If col-7 is empty/numeric and col-8 has content, use col-8.
-#
-# Comma-embedded rows (later exports) use col indices directly in the CSV string.
-# ---------------------------------------------------------------------------
-def parse_layout_b(df_raw):
-    records = []
-
-    for _, row in df_raw.iterrows():
-        cell0 = str(row.iloc[0]).strip()
-
-        # ---- comma-embedded full record ----
-        if "," in cell0 and re.match(r"^\d+,", cell0):
-            parts = next(iter(csv_split(cell0)))
-            if len(parts) < 9:
-                continue
-            try:
-                date_str = parts[3].strip().strip('"')
-                machine  = parts[4].strip().strip('"')
-                part     = parts[5].strip().strip('"')
-                wtype    = parts[7].strip().strip('"')   # always col-7 in embedded format
-                ctrl     = parts[10].strip().strip('"') if len(parts) > 10 else ""
-                peak     = parts[17].strip().strip('"') if len(parts) > 17 else ""
-                if not peak:
-                    peak = parts[14].strip().strip('"') if len(parts) > 14 else ""
-            except (IndexError, ValueError):
-                continue
-
-        # ---- standard tab-separated row ----
-        elif re.match(r"^\d+$", cell0):
-            date_str = safe_col(row, 3)
-            machine  = safe_col(row, 4)
-            part     = safe_col(row, 5)
-            ctrl     = safe_col(row, 10)
-            peak     = safe_col(row, 17)
-            if not peak:
-                peak = safe_col(row, 18)
-
-            # Detect wire-type column: col-7 if it looks like a type label,
-            # otherwise col-8 (older B24/B25 format where col-6=LotNo is missing)
-            col7 = safe_col(row, 7)
-            col8 = safe_col(row, 8)
-            # col-7 is the wire type when it contains alphabetic characters
-            # (excludes pure numbers which are lot/sample numbers)
-            if col7 and re.search(r"[a-zA-Z]", col7):
-                wtype = col7
-            elif col8 and re.search(r"[a-zA-Z]", col8):
-                wtype = col8
-            else:
-                wtype = col7 or col8  # fallback
-        else:
-            continue
-
-        records.append({"date_str": date_str, "machine": machine, "part": part,
-                         "wtype": wtype, "ctrl": ctrl, "peak": peak})
-
-    return pd.DataFrame(records) if records else pd.DataFrame(
-        columns=["date_str", "machine", "part", "wtype", "ctrl", "peak"])
-
-
-# ---------------------------------------------------------------------------
-# Main build
-# ---------------------------------------------------------------------------
-
-def build_dataset(csv_path):
+def load_data(csv_path: str) -> pd.DataFrame:
+    """
+    Read all lines, skip the first SKIP_ROWS, parse each remaining line as
+    a standard comma-separated row (values may be quoted), extract the five
+    columns we need, filter, normalise, deduplicate, and return a clean DataFrame.
+    """
     print(f"[1/4] Loading {csv_path} ...")
-    df_raw = load_raw(csv_path)
+    with open(csv_path, encoding="utf-8", errors="replace") as fh:
+        all_lines = fh.readlines()
 
-    print("[2/4] Parsing rows ...")
-    dfA = parse_layout_a(df_raw)
-    dfB = parse_layout_b(df_raw)
-    print(f"      Layout-A rows: {len(dfA)}")
-    print(f"      Layout-B rows: {len(dfB)}")
+    data_lines = all_lines[SKIP_ROWS:]
+    print(f"      Total lines after skip: {len(data_lines)}")
 
-    df = pd.concat([dfA, dfB], ignore_index=True)
+    records = []
+    for line in data_lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            fields = list(csv.reader([line]))[0]
+        except Exception:
+            continue
 
-    # filter product
-    product_up = PRODUCT.upper()
-    mask = (
-        df["machine"].str.upper().str.contains(product_up, na=False) |
-        df["part"].str.upper().str.contains(product_up, na=False)
-    )
-    df = df[mask].copy()
-    print(f"      Rows matching {PRODUCT}: {len(df)}")
+        # guard against short rows
+        if len(fields) <= max(COL_DATE, COL_MACHINE, COL_PRODUCT, COL_WTYPE, COL_PEAK):
+            continue
 
-    # filter ctrl chart flag
-    df = df[
-        df["ctrl"].str.upper().str.contains("CRTL", na=False) |
-        df["ctrl"].str.upper().str.strip().eq("YES")
-    ].copy()
-    print(f"      Rows with CRTL/YES flag: {len(df)}")
+        date_raw    = fields[COL_DATE].strip()
+        machine_raw = fields[COL_MACHINE].strip()
+        product_raw = fields[COL_PRODUCT].strip()
+        wtype_raw   = fields[COL_WTYPE].strip()
+        peak_raw    = fields[COL_PEAK].strip()
 
-    # resolve swapped machine/part (some rows have product in machine column)
-    def resolve_machine(row):
-        return row["part"] if PRODUCT.upper() in str(row["machine"]).upper() else row["machine"]
+        records.append({
+            "date_raw":    date_raw,
+            "machine_raw": machine_raw,
+            "product_raw": product_raw,
+            "wtype_raw":   wtype_raw,
+            "peak_raw":    peak_raw,
+        })
 
-    df["machine_raw"] = df.apply(resolve_machine, axis=1)
-    df["machine_id"]  = df["machine_raw"].apply(normalise_machine)
-    df["wire_key"]    = df["wtype"].apply(normalise_wire_type)
-    df["force"]       = pd.to_numeric(df["peak"], errors="coerce")
-    df["date"]        = pd.to_datetime(df["date_str"], errors="coerce")
+    print(f"      Parsed rows: {len(records)}")
 
-    before = len(df)
-    df = df.dropna(subset=["machine_id", "wire_key", "force", "date"])
-    df = df[df["machine_id"].isin(TARGET_MACHINES)]
-    df = df[df["force"] > 0]
-    print(f"      Clean rows: {len(df)} (dropped {before - len(df)})")
-    print(f"      Per machine: {df.groupby('machine_id').size().to_dict()}")
+    df = pd.DataFrame(records)
 
-    return df
+    # ── filter product ──────────────────────────────────────────────────────
+    df = df[df["product_raw"].str.upper().str.strip() == TARGET_PRODUCT].copy()
+    print(f"      After product filter ({TARGET_PRODUCT}): {len(df)}")
+
+    # ── normalise machine ───────────────────────────────────────────────────
+    df["Machine"] = df["machine_raw"].apply(normalise_machine)
+    df = df[df["Machine"].isin(TARGET_MACHINES)].copy()
+    print(f"      After machine filter {sorted(TARGET_MACHINES)}: {len(df)}")
+
+    # ── normalise wire type ─────────────────────────────────────────────────
+    df["Wire_Type"] = df["wtype_raw"].apply(normalise_wire_type)
+    df = df[df["Wire_Type"].notna()].copy()
+    print(f"      After wire-type normalisation: {len(df)}")
+
+    # ── parse date & peak force ─────────────────────────────────────────────
+    df["Date"]       = pd.to_datetime(df["date_raw"], errors="coerce").dt.strftime("%Y-%m-%d")
+    df["Peak_Force"] = pd.to_numeric(df["peak_raw"], errors="coerce")
+    df = df[df["Date"].notna() & df["Peak_Force"].notna() & (df["Peak_Force"] > 0)].copy()
+
+    # ── deduplicate: keep LAST row per (Date, Machine, Wire_Type) ───────────
+    df = df.drop_duplicates(subset=["Date", "Machine", "Wire_Type"], keep="last")
+    print(f"      After deduplication (keep last): {len(df)}")
+
+    # ── summary ─────────────────────────────────────────────────────────────
+    print()
+    for mid in sorted(TARGET_MACHINES):
+        sub = df[df["Machine"] == mid]
+        dates = sorted(sub["Date"].unique())
+        print(f"      {mid}: {len(dates)} dates  "
+              f"({dates[0] if dates else '—'} → {dates[-1] if dates else '—'})")
+
+    return df[["Date", "Machine", "Wire_Type", "Peak_Force"]].sort_values(
+        ["Machine", "Date", "Wire_Type"]
+    ).reset_index(drop=True)
 
 
-def group_by_machine_date(df):
-    print("[3/4] Grouping by machine + date ...")
+# ── pivot to JSON structure ───────────────────────────────────────────────────
+
+_WIRE_KEY = {
+    "TYPE 1":       "t1",
+    "TYPE 2":       "t2",
+    "TYPE 3 SHORT": "t3s",
+    "TYPE 3 LONG":  "t3l",
+}
+
+
+def build_json(df: pd.DataFrame) -> dict:
+    print("[3/4] Building JSON ...")
     result = {}
-    for machine_id in sorted(TARGET_MACHINES):
-        mdf = df[df["machine_id"] == machine_id].copy()
-        mdf["date_only"] = mdf["date"].dt.date
 
+    for machine_id in sorted(TARGET_MACHINES):
+        mdf = df[df["Machine"] == machine_id].copy()
+
+        # pivot so each date is one row and columns are t1/t2/t3s/t3l
+        mdf["wire_key"] = mdf["Wire_Type"].map(_WIRE_KEY)
         pivot = (
-            mdf.groupby(["date_only", "wire_key"])["force"]
-            .mean()
+            mdf.groupby(["Date", "wire_key"])["Peak_Force"]
+            .last()                           # keep last (already deduped, but safe)
             .unstack("wire_key")
             .reset_index()
-            .sort_values("date_only")
+            .sort_values("Date")
         )
 
         for col in ["t1", "t2", "t3s", "t3l"]:
             if col not in pivot.columns:
                 pivot[col] = float("nan")
 
+        # drop dates where ALL four types are missing
         pivot = pivot.dropna(subset=["t1", "t2", "t3s", "t3l"], how="all")
 
-        dates = [str(d) for d in pivot["date_only"]]
-        t1    = [round(v, 2) if pd.notna(v) else None for v in pivot["t1"]]
-        t2    = [round(v, 2) if pd.notna(v) else None for v in pivot["t2"]]
-        t3s   = [round(v, 2) if pd.notna(v) else None for v in pivot["t3s"]]
-        t3l   = [round(v, 2) if pd.notna(v) else None for v in pivot["t3l"]]
+        def fmt(series):
+            return [round(v, 2) if pd.notna(v) else None for v in series]
 
+        dates  = list(pivot["Date"])
         num_id = machine_id.replace("B", "")
+
         result[num_id] = {
-            "label":     machine_id + " Machine",
+            "label":     f"{machine_id} Machine",
             "title":     machine_id,
             "date":      dates[-1] if dates else "—",
             "specLimit": SPEC_LIMIT,
             "excel":     f"data/BOND PULL DATA IGN2932M75 {machine_id} bonder.xlsx",
             "dates":     dates,
-            "t1":        t1,
-            "t2":        t2,
-            "t3s":       t3s,
-            "t3l":       t3l,
+            "t1":        fmt(pivot["t1"]),
+            "t2":        fmt(pivot["t2"]),
+            "t3s":       fmt(pivot["t3s"]),
+            "t3l":       fmt(pivot["t3l"]),
         }
-        print(f"      {machine_id}: {len(dates)} date points")
+        print(f"      {machine_id}: {len(dates)} date points, last={result[num_id]['date']}")
 
     return result
 
 
-def write_json(data, out_path):
+# ── write JSON ────────────────────────────────────────────────────────────────
+
+def write_json(data: dict, out_path: str):
     print(f"[4/4] Writing {out_path} ...")
-    import pathlib
-    pathlib.Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, default=str)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
     print("      Done.")
 
 
+# ── entry point ───────────────────────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(description="Process RoyceData.csv → machine-data.json")
-    parser.add_argument("--csv", default="/home/integra/RoyceData.csv")
-    parser.add_argument("--out", default="/var/www/integra-royce/dashboard/data/machine-data.json")
+    parser = argparse.ArgumentParser(
+        description="RoyceData.csv → machine-data.json"
+    )
+    parser.add_argument(
+        "--csv", default="/home/integra/RoyceData.csv",
+        help="Path to RoyceData.csv"
+    )
+    parser.add_argument(
+        "--out", default="/var/www/integra-royce/dashboard/data/machine-data.json",
+        help="Output JSON path"
+    )
     args = parser.parse_args()
 
-    df   = build_dataset(args.csv)
-    data = group_by_machine_date(df)
+    print()
+    df   = load_data(args.csv)
+    print()
+    print("[2/4] Loaded clean dataset — building JSON ...")
+    data = build_json(df)
     write_json(data, args.out)
-    print("\nSummary:")
+
+    print()
+    print("Summary:")
     for mid, d in data.items():
         print(f"  B{mid}: {len(d['dates'])} dates, last={d['date']}")
 
