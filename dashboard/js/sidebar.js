@@ -1,5 +1,7 @@
 /* =============================================================
-   sidebar.js — sidebar toggle, shared across all pages
+   sidebar.js — sidebar toggle only.
+   Active-link highlighting is now handled by dashboard.js
+   via the [data-machine] attribute, not by page filename.
    ============================================================= */
 
 (function () {
@@ -16,11 +18,5 @@
     sidebar.classList.toggle('collapsed');
     if (main)   main.classList.toggle('expanded');
     if (footer) footer.classList.toggle('expanded');
-  });
-
-  /* Mark the active sidebar link based on current page filename */
-  var page = window.location.pathname.split('/').pop() || 'index.html';
-  document.querySelectorAll('.sidebar-link[data-page]').forEach(function (el) {
-    if (el.dataset.page === page) el.classList.add('active');
   });
 })();
