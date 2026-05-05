@@ -4,7 +4,7 @@ generate_excel.py
 =================
 Generates one Excel file per machine (B21, B24, B25, B27) from
 machine-data.json, matching the format of the reference files:
-  - Charts sheet  (header info + 4 line charts)
+  - Charts sheet  (header info + 4 line charts with X/Y axis labels)
   - Type 1 sheet  (DATE | ITEM | Data)
   - Type 2 sheet
   - Type 3 Short sheet
@@ -12,8 +12,8 @@ machine-data.json, matching the format of the reference files:
   - Data sheet    (DATE | MACHINE | ITEM | Type | Data)
 
 Usage:
-    python3 scripts/generate_excel.py \\
-        --json /var/www/integra-royce/dashboard/data/machine-data.json \\
+    python3 scripts/generate_excel.py \
+        --json /var/www/integra-royce/dashboard/data/machine-data.json \
         --out  /var/www/integra-royce/dashboard/data/excel
 
 Output files:
@@ -21,10 +21,6 @@ Output files:
     BOND_PULL_DATA_IGN2932M75_B24_bonder.xlsx
     BOND_PULL_DATA_IGN2932M75_B25_bonder.xlsx
     BOND_PULL_DATA_IGN2932M75_B27_bonder.xlsx
-
-Add to cron after process_csv.py:
-    0 * * * * python3 /var/www/integra-royce/scripts/process_csv.py ... && \\
-              python3 /var/www/integra-royce/scripts/generate_excel.py ...
 """
 
 import json
@@ -37,6 +33,7 @@ try:
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
     from openpyxl.chart import LineChart, Reference
+    from openpyxl.chart.axis import ChartLines
     from openpyxl.utils import get_column_letter
 except ImportError:
     sys.exit("openpyxl is required:  pip install openpyxl --break-system-packages")
@@ -122,31 +119,51 @@ def write_data_sheet(ws, machine_id, dates, t1, t2, t3s, t3l):
 
 
 def add_line_chart(ws_charts, title, data_ws_name, data_rows, anchor):
-    """Add a line chart to the Charts sheet."""
-    chart         = LineChart()
-    chart.title   = title
-    chart.style   = 10
-    chart.height  = 10
-    chart.width   = 18
-    chart.legend  = None
+    """Add a line chart with X and Y axis labels to the Charts sheet."""
+    chart        = LineChart()
+    chart.title  = title
+    chart.style  = 10
+    chart.height = 10
+    chart.width  = 18
+    chart.legend = None
+
+    # ── Y axis ───────────────────────────────────────────────────────────────
+    chart.y_axis.title    = "Peak Force (g)"
+    chart.y_axis.numFmt   = "0.00"
+    chart.y_axis.majorGridlines = ChartLines()   # show horizontal gridlines
+    chart.y_axis.scaling.min = 0                 # start Y axis at 0
+
+    # ── X axis ───────────────────────────────────────────────────────────────
+    chart.x_axis.title    = "Date"
+    chart.x_axis.numFmt   = "MM/DD/YY"
+    chart.x_axis.tickLblPos = "low"             # labels below chart
 
     if data_rows >= 2:
+        # Data series — column C (Peak Force)
         data_ref = Reference(
             ws_charts.parent[data_ws_name],
             min_col=3, min_row=2, max_row=data_rows
         )
         chart.add_data(data_ref)
 
+        # Categories — column A (Date)
         cats = Reference(
             ws_charts.parent[data_ws_name],
             min_col=1, min_row=2, max_row=data_rows
         )
         chart.set_categories(cats)
 
+        # Style the line
         s = chart.series[0]
         s.graphicalProperties.line.solidFill = "4472C4"
-        s.graphicalProperties.line.width     = 18000
+        s.graphicalProperties.line.width     = 18000   # 2 pt
         s.smooth = False
+
+        # Show data point markers
+        s.marker.symbol   = "circle"
+        s.marker.size     = 5
+        s.marker.graphicalProperties.solidFill   = "4472C4"
+        s.marker.graphicalProperties.line.solidFill = "4472C4"
 
     ws_charts.add_chart(chart, anchor)
 
@@ -166,7 +183,7 @@ def generate_workbook(machine_id: str, data: dict, out_dir: Path):
 
     wb = Workbook()
 
-    # Charts sheet
+    # ── Charts sheet ──────────────────────────────────────────────────────────
     ws_charts       = wb.active
     ws_charts.title = "Charts"
     ws_charts["C1"] = "MACHINE";   ws_charts["C1"].font = HEADER_FONT
@@ -178,7 +195,7 @@ def generate_workbook(machine_id: str, data: dict, out_dir: Path):
     ws_charts.column_dimensions["E"].width = 12
     ws_charts.column_dimensions["F"].width = 14
 
-    # Type data sheets
+    # ── Type data sheets ──────────────────────────────────────────────────────
     series_map = {"t1": t1, "t2": t2, "t3s": t3s, "t3l": t3l}
     last_rows  = {}
 
@@ -187,19 +204,20 @@ def generate_workbook(machine_id: str, data: dict, out_dir: Path):
         last_row = write_type_sheet(ws, machine_id, dates, series_map[key])
         last_rows[sheet_name] = last_row
 
-    # Data sheet
+    # ── Data sheet ────────────────────────────────────────────────────────────
     write_data_sheet(wb.create_sheet("Data"), machine_id, dates, t1, t2, t3s, t3l)
 
-    # Add 4 line charts to Charts sheet
+    # ── 4 line charts on Charts sheet ─────────────────────────────────────────
     chart_configs = [
-        (f"BOND DATA CHART :: TYPE 1",       "Type 1",       "B2"),
-        (f"BOND DATA CHART :: TYPE 2",        "Type 2",       "K2"),
-        (f"BOND DATA CHART :: TYPE 3 SHORT",  "Type 3 Short", "B22"),
-        (f"BOND DATA CHART :: TYPE 3 LONG",   "Type 3 Long",  "K22"),
+        ("BOND DATA CHART :: TYPE 1",       "Type 1",       "B2"),
+        ("BOND DATA CHART :: TYPE 2",        "Type 2",       "K2"),
+        ("BOND DATA CHART :: TYPE 3 SHORT",  "Type 3 Short", "B22"),
+        ("BOND DATA CHART :: TYPE 3 LONG",   "Type 3 Long",  "K22"),
     ]
     for title, sheet_name, anchor in chart_configs:
         add_line_chart(ws_charts, title, sheet_name, last_rows.get(sheet_name, 1), anchor)
 
+    # ── Save ──────────────────────────────────────────────────────────────────
     fname = f"BOND_PULL_DATA_{PRODUCT}_{machine_id}_bonder.xlsx"
     fpath = out_dir / fname
     wb.save(fpath)
