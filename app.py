@@ -4,6 +4,7 @@ Flask Application
 """
 
 from flask import Flask, render_template, redirect, url_for, session, request, jsonify
+from werkzeug.middleware.proxy_fix import ProxyFix
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.utils
@@ -13,6 +14,9 @@ import os
 
 app = Flask(__name__)
 app.secret_key = 'integra-bond-secret-2024'  # Change in production
+
+# Fix for running behind Nginx reverse proxy (required for HTTPS to work correctly)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ── Auth credentials (change in production) ───────────────────────────────────
 USERS = {

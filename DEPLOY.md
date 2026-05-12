@@ -5,12 +5,13 @@
 - Linux server (Ubuntu 22.04 recommended)
 - Nginx (reverse proxy)
 - Gunicorn (WSGI server)
+- Certbot (for HTTPS / Let's Encrypt SSL)
 
 ## First-time Install on Remote Server
 
 ### 1. Install system packages
 ```bash
-sudo apt update && sudo apt install -y python3 python3-pip python3-venv git nginx
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv git nginx certbot python3-certbot-nginx
 ```
 
 ### 2. Clone the repository
@@ -45,7 +46,7 @@ app.secret_key = 'your-random-secret-key'
 ```bash
 source venv/bin/activate
 python app.py
-# Visit http://your-server:5000
+# Visit http://chart.integratech.com
 ```
 
 ### 7. Run with Gunicorn (production)
@@ -54,7 +55,7 @@ source venv/bin/activate
 gunicorn -w 2 -b 127.0.0.1:5000 app:app
 ```
 
-### 8. Configure Nginx
+### 8. Configure Nginx (HTTP only — before SSL)
 ```bash
 sudo nano /etc/nginx/sites-available/bondapp
 ```
@@ -62,13 +63,14 @@ Paste:
 ```nginx
 server {
     listen 80;
-    server_name your-domain.com;  # or server IP
+    server_name chart.integratech.com;
 
     location / {
         proxy_pass http://127.0.0.1:5000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
@@ -77,7 +79,51 @@ sudo ln -s /etc/nginx/sites-available/bondapp /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl restart nginx
 ```
 
-### 9. Run Gunicorn as a system service
+### 9. Obtain SSL certificate with Certbot
+```bash
+sudo certbot --nginx -d chart.integratech.com
+```
+Certbot will:
+- Automatically obtain a free Let's Encrypt certificate
+- Update your Nginx config to serve HTTPS on port 443
+- Add an HTTP → HTTPS redirect
+
+When prompted, choose **option 2: Redirect** to force all HTTP traffic to HTTPS.
+
+After this step, your Nginx config will look like:
+```nginx
+server {
+    listen 80;
+    server_name chart.integratech.com;
+    return 301 https://$host$request_uri;  # HTTP → HTTPS redirect
+}
+
+server {
+    listen 443 ssl;
+    server_name chart.integratech.com;
+
+    ssl_certificate /etc/letsencrypt/live/chart.integratech.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/chart.integratech.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### 10. Verify HTTPS auto-renewal
+Let's Encrypt certificates expire every 90 days. Certbot installs a cron job / systemd timer to renew automatically. Verify it works:
+```bash
+sudo certbot renew --dry-run
+```
+
+### 11. Run Gunicorn as a system service
 ```bash
 sudo nano /etc/systemd/system/bondapp.service
 ```
@@ -139,4 +185,10 @@ sudo systemctl restart bondapp
 
 # Stop app
 sudo systemctl stop bondapp
+
+# Check SSL certificate status
+sudo certbot certificates
+
+# Manually renew SSL certificate
+sudo certbot renew
 ```
