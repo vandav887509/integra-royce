@@ -17,15 +17,16 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ── CSV config ────────────────────────────────────────────────────────────────
 CSV_PATH = os.path.join(os.path.dirname(__file__), 'RoyceData.csv')
+CSV_SKIPROWS = 3760      # always start from row 3760
 PRODUCT_FILTER = 'IGN2932M75'
-LOWER_LIMIT = 8  # Red dashed line value on charts
+LOWER_LIMIT = 8
 
-# Column indices (0-based) in the TSV file
+# Column indices (0-based) after skiprows
 COL_TEST_ID   = 0
 COL_DATE      = 3
 COL_MACHINE   = 4
 COL_PRODUCT   = 5
-COL_BOND_TYPE = 8
+COL_BOND_TYPE = 7
 COL_GRADE     = 17
 
 MACHINES   = ['B21', 'B24', 'B25', 'B27']
@@ -43,13 +44,13 @@ def normalize_machine(m):
 def normalize_bond_type(b):
     b = str(b).strip().upper()
     b_clean = re.sub(r'[\s\-#_]', '', b)
-    if re.search(r'3.*(SHORT|SCHORT|CHORT|SCHOT|SHOT)', b) or b_clean in ['T3SHORT', 'TYPE3SHORT', 'TYYPE3SHORT']:
+    if re.search(r'3.*(SHORT|SCHORT|CHORT|SCHOT|SHOT)', b) or b_clean in ['T3SHORT', 'TYPE3SHORT', 'TYYPE3SHORT', 'T3CHORT']:
         return 'TYPE 3 SHORT'
     if re.search(r'3.*(LONG)', b) or b_clean in ['T3LONG', 'TYPE3LONG']:
         return 'TYPE 3 LONG'
     if re.search(r'TYPE[-\s#]?3$', b) or b_clean in ['TYPE3']:
         return None
-    if re.search(r'TYPE[-\s#]?1$', b) or b_clean in ['TYPE1', 'TYPEI']:
+    if re.search(r'TYPE[-\s#]?1$', b) or b_clean in ['TYPE1', 'TYPEI', 'TYPEI']:
         return 'TYPE 1'
     if re.search(r'TYPE[-\s#]?2$', b) or b_clean in ['TYPE2']:
         return 'TYPE 2'
@@ -59,9 +60,9 @@ def normalize_bond_type(b):
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_data():
-    # File is tab-separated with a header block at top; read all rows, no header
     df = pd.read_csv(
-        CSV_PATH, sep='\t', header=None, on_bad_lines='skip', engine='python'
+        CSV_PATH, sep=',', skiprows=CSV_SKIPROWS, header=None,
+        quotechar='"', on_bad_lines='skip', engine='python'
     )
 
     # Keep only rows where col 0 is numeric (actual data rows)
