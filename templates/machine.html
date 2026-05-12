@@ -9,9 +9,9 @@
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         :root {
-            --bg: #0f1117; --surface: #181c27; --surface2: #1e2235;
-            --border: #2a2f3e; --accent: #3b82f6; --accent-r: #ef4444;
-            --text: #e2e8f0; --muted: #64748b;
+            --bg: #f4f6f9; --surface: #ffffff; --surface2: #f0f2f6;
+            --border: #d1d9e0; --accent: #1a73e8; --accent-r: #ef4444;
+            --text: #1a202c; --muted: #64748b;
             --sidebar-w: 240px; --topbar-h: 56px;
             --mono: 'IBM Plex Mono', monospace; --sans: 'IBM Plex Sans', sans-serif;
         }
@@ -43,7 +43,7 @@
             text-decoration: none; color: var(--muted); font-size: 13px;
             border-left: 3px solid transparent; transition: all 0.15s; margin: 1px 0; }
         .sidebar-link:hover { color: var(--text); background: var(--surface2); border-left-color: var(--border); }
-        .sidebar-link.active { color: var(--accent); background: rgba(59,130,246,0.08);
+        .sidebar-link.active { color: var(--accent); background: rgba(26,115,232,0.06);
             border-left-color: var(--accent); font-weight: 600; }
         .sidebar-link .dot { width: 8px; height: 8px; border-radius: 50%;
             background: var(--border); flex-shrink: 0; transition: background 0.15s; }
@@ -54,7 +54,7 @@
             margin-bottom: 24px; flex-wrap: wrap; }
         .page-title { font-size: 22px; font-weight: 600; color: var(--text); }
         .page-badge { font-family: var(--mono); font-size: 11px; padding: 3px 9px;
-            background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.25);
+            background: rgba(26,115,232,0.08); border: 1px solid rgba(26,115,232,0.2);
             border-radius: 100px; color: var(--accent); letter-spacing: 0.06em; }
         .page-meta { font-size: 12px; color: var(--muted); margin-left: auto; font-family: var(--mono); }
         .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -127,12 +127,12 @@
         const el = document.getElementById('chart-' + i);
         if (!el) return;
         const fig = JSON.parse(chartJson);
-        fig.layout.paper_bgcolor = 'transparent';
-        fig.layout.plot_bgcolor  = '#13171f';
-        fig.layout.font = { ...fig.layout.font, color: '#94a3b8' };
-        fig.layout.xaxis = { ...fig.layout.xaxis, gridcolor: '#2a2f3e', color: '#94a3b8' };
-        fig.layout.yaxis = { ...fig.layout.yaxis, gridcolor: '#2a2f3e', color: '#94a3b8' };
-        fig.layout.title.font = { ...fig.layout.title.font, color: '#e2e8f0' };
+        fig.layout.paper_bgcolor = 'white';
+        fig.layout.plot_bgcolor  = 'white';
+        fig.layout.font = { ...fig.layout.font, color: '#333' };
+        fig.layout.xaxis = { ...fig.layout.xaxis, gridcolor: '#eee', color: '#555' };
+        fig.layout.yaxis = { ...fig.layout.yaxis, gridcolor: '#eee', color: '#555' };
+        fig.layout.title.font = { ...fig.layout.title.font, color: '#333' };
         Plotly.newPlot(el, fig.data, fig.layout, {
             responsive: true, displayModeBar: true,
             modeBarButtonsToRemove: ['select2d','lasso2d','autoScale2d'],
