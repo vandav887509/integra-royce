@@ -76,8 +76,8 @@ def normalize_bond_type(b):
 
 def load_data():
     df = pd.read_csv(
-        CSV_PATH, sep=',', skiprows=CSV_SKIPROWS, header=None,
-        names=COL_NAMES, quotechar='"', on_bad_lines='skip'
+        CSV_PATH, sep='\t', skiprows=CSV_SKIPROWS, header=None,
+        names=COL_NAMES, on_bad_lines='skip'
     )
     # Keep only numeric Test IDs
     df = df[pd.to_numeric(df['Test ID'], errors='coerce').notna()]
