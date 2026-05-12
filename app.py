@@ -17,20 +17,18 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # ── CSV config ────────────────────────────────────────────────────────────────
 CSV_PATH = os.path.join(os.path.dirname(__file__), 'RoyceData.csv')
-CSV_SKIPROWS = 3800
 PRODUCT_FILTER = 'IGN2932M75'
 LOWER_LIMIT = 8  # Red dashed line value on charts
 
-COL_NAMES = [
-    'Test ID', 'Test Number', 'Test Number In Sample', 'Date/Time (Local)',
-    'User Field 1', 'User Field 2', 'User Field 3', 'User Field 4',
-    'User Field 5', 'User Field 6', 'User Field 7', 'User Field 8',
-    'User Field 9', 'User Field 10', 'User Field 11', 'User Field 12',
-    'Grade Code', 'Peak Force (g/kg)', 'Raw Peak Force (g/kg)',
-    'Displacement At Peak Force', 'Displacement At Spec Force', 'Module Serial'
-]
+# Column indices (0-based) in the TSV file
+COL_TEST_ID   = 0
+COL_DATE      = 3
+COL_MACHINE   = 4
+COL_PRODUCT   = 5
+COL_BOND_TYPE = 8
+COL_GRADE     = 17
 
-MACHINES = ['B21', 'B24', 'B25', 'B27']
+MACHINES   = ['B21', 'B24', 'B25', 'B27']
 BOND_TYPES = ['TYPE 1', 'TYPE 2', 'TYPE 3 SHORT', 'TYPE 3 LONG']
 
 
@@ -61,30 +59,30 @@ def normalize_bond_type(b):
 # ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_data():
+    # File is tab-separated with a header block at top; read all rows, no header
     df = pd.read_csv(
-        CSV_PATH, sep=',', skiprows=CSV_SKIPROWS, header=None,
-        names=COL_NAMES, quotechar='"', on_bad_lines='skip',
-        engine='python'
+        CSV_PATH, sep='\t', header=None, on_bad_lines='skip', engine='python'
     )
-    df = df[pd.to_numeric(df['Test ID'], errors='coerce').notna()]
 
-    df['Date'] = pd.to_datetime(df['Date/Time (Local)'], errors='coerce').dt.strftime('%m.%d.%y')
-    df['DateSort'] = pd.to_datetime(df['Date/Time (Local)'], errors='coerce').dt.date
-    df['Grade Code'] = pd.to_numeric(df['Grade Code'], errors='coerce')
+    # Keep only rows where col 0 is numeric (actual data rows)
+    df = df[pd.to_numeric(df[COL_TEST_ID], errors='coerce').notna()].copy()
 
-    df['Machine'] = df['User Field 1'].apply(normalize_machine)
-    df['Bond Type'] = df['User Field 4'].apply(normalize_bond_type)
-    df['Product'] = df['User Field 2'].str.strip().str.upper()
+    df['Date']     = pd.to_datetime(df[COL_DATE], errors='coerce').dt.strftime('%m.%d.%y')
+    df['DateSort'] = pd.to_datetime(df[COL_DATE], errors='coerce').dt.date
+    df['Grade']    = pd.to_numeric(df[COL_GRADE], errors='coerce')
+    df['Machine']  = df[COL_MACHINE].apply(normalize_machine)
+    df['BondType'] = df[COL_BOND_TYPE].apply(normalize_bond_type)
+    df['Product']  = df[COL_PRODUCT].astype(str).str.strip().str.upper()
 
     df = df[
-        (df['Product'] == PRODUCT_FILTER) &
+        (df['Product']  == PRODUCT_FILTER) &
         (df['Machine'].notna()) &
-        (df['Bond Type'].notna()) &
-        (df['Grade Code'].notna())
+        (df['BondType'].notna()) &
+        (df['Grade'].notna())
     ]
 
     grouped = (
-        df.groupby(['Machine', 'Bond Type', 'Date', 'DateSort'])['Grade Code']
+        df.groupby(['Machine', 'BondType', 'Date', 'DateSort'])['Grade']
         .mean()
         .round(2)
         .reset_index()
@@ -96,15 +94,15 @@ def load_data():
 def build_charts(machine, data):
     charts = []
     for bond_type in BOND_TYPES:
-        subset = data[(data['Machine'] == machine) & (data['Bond Type'] == bond_type)]
+        subset = data[(data['Machine'] == machine) & (data['BondType'] == bond_type)]
         fig = go.Figure()
 
         if not subset.empty:
             fig.add_trace(go.Scatter(
                 x=subset['Date'],
-                y=subset['Grade Code'],
+                y=subset['Grade'],
                 mode='lines+markers+text',
-                text=subset['Grade Code'].astype(str),
+                text=subset['Grade'].astype(str),
                 textposition='top center',
                 textfont=dict(size=11, color='#1a73e8'),
                 line=dict(color='#1a73e8', width=2),
