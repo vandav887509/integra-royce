@@ -1,21 +1,44 @@
-# integra-royce
+# IGN2932M75 — Bond Pull QC Dashboard
 
-**IGN2932M75 — Bond Pull Data Control Charts**
+## Version 0.1 — Stable Release
 
-Flask web portal displaying interactive Plotly control charts for bond pull data,
-filtered per machine (B21, B24, B25, B27) and bond type (Type 1, 2, 3 Short, 3 Long).
+A static HTML dashboard served via Nginx displaying bond pull control charts for the IGN2932M75 product across 4 bonder machines (B21, B24, B25, B27).
 
 ## Stack
-- **Python / Flask** — web framework
-- **Pandas** — CSV data processing
-- **Plotly** — interactive charts
-- **Gunicorn + Nginx** — production deployment
+- **Frontend:** Static HTML + Chart.js 2.9.x
+- **Data pipeline:** Python (`scripts/process_csv.py`) reads `RoyceData.csv` → generates `dashboard/data/machine-data.json`
+- **Server:** Ubuntu 22.04 + Nginx (serves `dashboard/` folder)
+- **SSL:** Let's Encrypt via Certbot
+- **URL:** https://chart.integratech.com
 
-## Quick start
+## Features
+- 4 machines: B21, B24, B25, B27
+- 4 bond types per machine: Type 1, Type 2, Type 3 Short, Type 3 Long
+- KPI cards showing latest value + previous + % change
+- Control charts with LCL=8 spec limit line
+- Data table view
+- Excel file downloads per machine
+- Dark sidebar + light main content area
+
+## Updating data
 ```bash
-pip install -r requirements.txt
-cp RoyceData.csv .
-python app.py
+cd /opt/bondapp
+source venv/bin/activate
+python3 scripts/process_csv.py \
+    --csv /opt/bondapp/RoyceData.csv \
+    --out /opt/bondapp/dashboard/data/machine-data.json
+python3 -c "
+import json
+data = json.load(open('/opt/bondapp/dashboard/data/machine-data.json'))
+js = 'window.MACHINE_DATA = ' + json.dumps(data, indent=2) + ';'
+open('/opt/bondapp/dashboard/js/machine-data.js', 'w').write(js)
+print('Done')
+"
 ```
 
-See [DEPLOY.md](DEPLOY.md) for full server setup.
+## Restoring to v0.1
+```bash
+cd /opt/bondapp
+git fetch origin
+git reset --hard v0.1
+```
