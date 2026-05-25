@@ -3,16 +3,20 @@
   function $(id) { return document.getElementById(id); }
   function setText(id, v) { var el=$(id); if(el) el.textContent=v; }
   function setHref(id, v) { var el=$(id); if(el) el.href=v; }
+
   function getMachineFromURL() {
-    var params=new URLSearchParams(window.location.search);
-    var machine=params.get('machine');
-    var data=window.MACHINE_DATA;
-    if(!machine||!data[machine]) machine=Object.keys(data)[0];
+    var params  = new URLSearchParams(window.location.search);
+    var machine = params.get('machine');
+    var data    = window.MACHINE_DATA;
+    // default to B21 if no machine param or unrecognised
+    if (!machine || !data[machine]) machine = '21';
     return machine;
   }
+
   function pushMachineURL(key) { window.history.pushState({machine:key},'',window.location.pathname+'?machine='+key); }
   function pctLabel(c,p) { if(p==null||p===0) return ''; var d=((c-p)/Math.abs(p)*100).toFixed(1); return (d>0?'\u25b2 ':'\u25bc ')+Math.abs(d)+'%'; }
   function arrowClass(c,p) { return c>=p?'val-up':'val-down'; }
+
   function updateMetrics(d) {
     var series=[
       {label:'Type 1',data:d.t1,ids:['metric1Label','metric1Val','metric1Sub']},
@@ -31,6 +35,7 @@
       else if(subEl){subEl.textContent='';}
     });
   }
+
   function updateTable(d) {
     var LIMIT=d.specLimit||8,tbody=$('tableBody');
     if(!tbody) return;
@@ -46,17 +51,20 @@
       tbody.innerHTML+='<tr><td>'+date+'</td><td class="td-val">'+fmt(t1)+'</td><td class="td-val">'+fmt(t2)+'</td><td class="td-val">'+fmt(t3s)+'</td><td class="td-val">'+fmt(t3l)+'</td><td class="'+cls+'">'+status+'</td></tr>';
     });
   }
+
   function renderMachine(key) {
     var d=window.MACHINE_DATA[key]; if(!d) return;
     document.title='IGN2932M75 \u2014 '+d.label;
     setText('currentMachineLabel',d.label); setText('currentMachineTitle',d.title);
-    setText('chartDate','Last updated: '+d.date); setHref('downloadLink',d.excel);
+    setText('chartDate','Last updated: '+d.date);
     setText('tableTitle',d.title+' \u2014 Raw Measurements');
     document.querySelectorAll('[data-machine]').forEach(function(el){el.classList.toggle('active',el.dataset.machine===key);});
     window.IntegraCharts.buildAll(d);
     updateMetrics(d); updateTable(d);
   }
+
   function switchMachine(key) { pushMachineURL(key); renderMachine(key); }
+
   function initTabs() {
     document.querySelectorAll('.tab-btn').forEach(function(btn){
       btn.addEventListener('click',function(){
@@ -68,17 +76,22 @@
       });
     });
   }
+
   function initMachineSwitcher() {
     document.querySelectorAll('[data-machine]').forEach(function(el){
       el.addEventListener('click',function(e){if(el.tagName==='A') e.preventDefault(); switchMachine(this.dataset.machine);});
     });
   }
+
   window.addEventListener('popstate',function(e){renderMachine((e.state&&e.state.machine)?e.state.machine:getMachineFromURL());});
+
   function init() {
     initTabs(); initMachineSwitcher();
-    var key=getMachineFromURL();
+    var key = getMachineFromURL();
+    // Always update URL to show which machine is active
     window.history.replaceState({machine:key},'',window.location.pathname+'?machine='+key);
     renderMachine(key);
   }
-  if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',init);}else{init();}
+
+  document.addEventListener('machineDataReady', init);
 })();
